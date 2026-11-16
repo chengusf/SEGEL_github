@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>SEGEL</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+
+body {
+    font-family: Arial, sans-serif;
+    max-width: 900px;
+    margin: 40px auto;
+    padding: 20px;
+    line-height: 1.6;
+    color: #333;
+}
+
+.summary {
+    background: #f4f7fa;
+    border-left: 4px solid #3975a8;
+    padding: 15px 20px;
+    margin: 20px 0;
+    border-radius: 5px;
+}
+
+.summary h3 {
+    margin-top: 0;
+    color: #24577a;
+}
+
+.download-btn {
+    background-color: #3975a8;
+    color: white;
+    border: none;
+    padding: 10px 16px;
+    font-size: 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin: 10px 0 20px 0;
+}
+
+.download-btn:hover {
+    background-color: #24577a;
+}
+
+.download-btn:disabled {
+    background-color: #99b8d4;
+    cursor: not-allowed;
+}
+
+</style>
+</head>
+<body>
+
+<h2>SEGEL</h2>
+
+<div class="summary">
+    <h3>About this database</h3>
+    <p>
+    SEGEL (Smoking Effects on Gene Expression of Lung) contains eight public expression microarray data sets from trachea epithelial cells, large airway epithelial cells, small airway epithelial cells, and alveolar macrophage.
+    The microarray data sets visualizes the effects of smoking on gene expression in different human cells in the lungs. The database supports genes associated with
+    multiple probe IDs, allowing users to retrieve
+    all available documents for a given gene.
+    </p>
+    <p>
+    <strong>How to use:</strong> Enter a gene symbol
+    (e.g., PAX8, DDR1, or TP53)
+    to retrieve the corresponding microarrays.
+    </p>
+</div>
+
+<!-- Search interface -->
+<h3>Search Gene Symbols</h3>
+
+<input
+    type="text"
+    id="gene"
+    placeholder="Enter genes (e.g. PAX8; DDR1; TP53)"
+    style="width:350px; padding:10px;"
+>
+
+<button onclick="searchGene()" style="padding:10px 15px; cursor:pointer;">
+    Search
+</button>
+
+<!-- Search results -->
+<div id="results"></div>
+
+<!-- JavaScript -->
+<script>
+let mapping = {};
+let mappingLoaded = false;
+let currentMatches = []; // Stores { gene, probe, url } for Download All
+
+const baseURL = new URL(".", window.location.href);
+
+// Load gene database
+fetch(new URL("mapping.json", baseURL))
+.then(response => {
+    if (!response.ok) {
+        throw new Error("mapping.json could not be found");
+    }
+    return response.json();
+})
+.then(data => {
+    mapping = data;
+    mappingLoaded = true;
+    console.log("Gene database loaded successfully");
+})
+.catch(error => {
+    document.getElementById("results").innerHTML =
+        "<p>Error loading database: " + error.message + "</p>";
+});
+
+function searchGene() {
+    const input = document.getElementById("gene").value;
+    const resultsDiv = document.getElementById("results");
+    resultsDiv.innerHTML = "";
+    currentMatches = []; // Reset previous matches
+
+    if (!mappingLoaded) {
+        resultsDiv.innerHTML =
+            "<p>Database is still loading. Please wait.</p>";
+        return;
+    }
+
+    // Separate genes using semicolons
+    const genes = [...new Set(
+        input.split(";")
+        .map(g => g.trim().toUpperCase())
+        .filter(g => g !== "")
+    )];
+
+    if (genes.length === 0) {
+        resultsDiv.innerHTML =
+            "<p>Please enter at least one gene.</p>";
+        return;
+    }
+
+    let html = "";
+    let foundCount = 0;
+    let missingGenes = [];
+
+    genes.forEach(gene => {
+        if (!mapping[gene]) {
+            missingGenes.push(gene);
+            return;
+        }
+
+        foundCount++;
+        html += `<h3>${gene}</h3>`;
+
+        mapping[gene].forEach(probe => {
+            const pdfURL =
+                "https://ttsttz.github.io/SEGEL-search-site2/PDF/"
+                + encodeURIComponent(probe) + ".pdf";
+
+            currentMatches.push({
+                gene: gene,
+                probe: probe,
+                url: pdfURL
+            });
+
+            html += `
+                <p>
+                    ${probe}
+                    <a href="${pdfURL}" target="_blank">
+                        Open PDF
+                    </a>
+                </p>
+            `;
+        });
+    });
+
+    // Add Download All button if at least one PDF was found
+    let downloadButtonHtml = "";
+    if (currentMatches.length > 0) {
+        downloadButtonHtml = `
+            <button id="downloadAllBtn" class="download-btn" onclick="downloadAllPDFs()">
+                Download All PDFs (${currentMatches.length} files as ZIP)
+            </button>
+            <span id="downloadStatus" style="margin-left: 10px; font-size: 14px; color: #555;"></span>
+        `;
+    }
+
+    // Search summary
+    html = `
+        <p>
+            Genes searched: ${genes.length}<br>
+            Genes found: ${foundCount}<br>
+            Genes not found: ${missingGenes.length}
+        </p>
+        ${downloadButtonHtml}
+    ` + html;
+
+    // Report genes not found
+    if (missingGenes.length > 0) {
+        html += `
+            <h3>Genes not found</h3>
+            <p>${missingGenes.join(", ")}</p>
+        `;
+    }
+
+    resultsDiv.innerHTML = html;
+}
+
+async function downloadAllPDFs() {
+    if (currentMatches.length === 0) return;
+
+    const btn = document.getElementById("downloadAllBtn");
+    const status = document.getElementById("downloadStatus");
+    btn.disabled = true;
+
+    const zip = new JSZip();
+    const rootFolder = zip.folder("SEGEL_PDFs");
+    let completed = 0;
+    let failed = 0;
+
+    status.textContent = `Fetching 0 of ${currentMatches.length} PDFs...`;
+
+    for (const item of currentMatches) {
+        try {
+            const response = await fetch(item.url);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const blob = await response.blob();
+
+            // Place each PDF inside a subfolder named after its gene symbol
+            const geneFolder = rootFolder.folder(item.gene);
+            geneFolder.file(`${item.probe}.pdf`, blob);
+        } catch (err) {
+            console.error(`Failed to fetch ${item.probe}.pdf:`, err);
+            failed++;
+        }
+
+        completed++;
+        status.textContent = `Fetching ${completed} of ${currentMatches.length} PDFs...`;
+    }
+
+    status.textContent = "Creating ZIP folder...";
+
+    try {
+        const zipBlob = await zip.generateAsync({ type: "blob" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(zipBlob);
+        link.download = "SEGEL_PDFs.zip";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(link.href);
+
+        status.textContent = failed > 0
+            ? `Done! (${failed} file(s) could not be retrieved)`
+            : "Download complete!";
+    } catch (err) {
+        status.textContent = "Error creating ZIP file.";
+        console.error(err);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// Trigger search when pressing Enter inside the input box
+document.getElementById("gene").addEventListener("keydown", function(event) {
+    if (event.key === "Enter") {
+        event.preventDefault();
+        searchGene();
+    }
+});
+</script>
+
+</body>
+</html>
