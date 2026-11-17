@@ -28,6 +28,23 @@ body {
     color: #24577a;
 }
 
+.search-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.fuzzy-label {
+    font-size: 14px;
+    color: #444;
+    cursor: pointer;
+    user-select: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
 .download-btn {
     background-color: #3975a8;
     color: white;
@@ -58,30 +75,44 @@ body {
     <h3>About this database</h3>
     <p>
     SEGEL (Smoking Effects on Gene Expression of Lung) contains eight public expression microarray data sets from trachea epithelial cells, large airway epithelial cells, small airway epithelial cells, and alveolar macrophage.
-    The microarray data sets visualizes the effects of smoking on gene expression in different human cells in the lungs. The database supports genes associated with
+    The microarray data sets visualize the effects of smoking on gene expression in different human cells in the lungs. The database supports genes associated with
     multiple probe IDs, allowing users to retrieve
     all available documents for a given gene.
     </p>
     <p>
-    <strong>How to use:</strong> Enter a gene symbol
-    (e.g., PAX8, DDR1, or TP53)
-    to retrieve the corresponding microarrays.
+    <strong>How to use:</strong>
+    </p>
+    <p>
+    Single gene search: PAX8 (enable <em>Fuzzy search</em> to match partial names like DUOX &rarr; DUOX1, DUOX2)
+    </p>
+    <p>
+    Multiple gene search: PAX8; DDR1; TP53 (exact match only)
+    </p>
+    <p style="margin-bottom: 0;">
+    <strong>Reference:</strong> <a href="https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0128326" target="_blank" rel="noopener noreferrer">SEGEL: A Web Server for Visualization of Smoking Effects on Human Lung Gene Expression</a>
     </p>
 </div>
 
 <!-- Search interface -->
 <h3>Search Gene Symbols</h3>
 
-<input
-    type="text"
-    id="gene"
-    placeholder="Enter genes (e.g. PAX8; DDR1; TP53)"
-    style="width:350px; padding:10px;"
->
+<div class="search-controls">
+    <input
+        type="text"
+        id="gene"
+        placeholder="Enter genes (e.g. PAX8; DDR1; TP53)"
+        style="width:350px; padding:10px;"
+    >
 
-<button onclick="searchGene()" style="padding:10px 15px; cursor:pointer;">
-    Search
-</button>
+    <button onclick="searchGene()" style="padding:10px 15px; cursor:pointer;">
+        Search
+    </button>
+
+    <label class="fuzzy-label" title="Matches partial gene names when searching a single gene">
+        <input type="checkbox" id="fuzzySearch">
+        Fuzzy search (single gene only)
+    </label>
+</div>
 
 <!-- Search results -->
 <div id="results"></div>
@@ -92,10 +123,8 @@ let mapping = {};
 let mappingLoaded = false;
 let currentMatches = []; // Stores { gene, probe, url } for Download All
 
-const baseURL = new URL(".", window.location.href);
-
 // Load gene database
-fetch(new URL("mapping.json", baseURL))
+fetch("mapping.json")
 .then(response => {
     if (!response.ok) {
         throw new Error("mapping.json could not be found");
@@ -105,7 +134,7 @@ fetch(new URL("mapping.json", baseURL))
 .then(data => {
     mapping = data;
     mappingLoaded = true;
-    console.log("Gene database loaded successfully");
+    console.log("Gene database loaded successfully. Total genes:", Object.keys(mapping).length);
 })
 .catch(error => {
     document.getElementById("results").innerHTML =
@@ -114,9 +143,11 @@ fetch(new URL("mapping.json", baseURL))
 
 function searchGene() {
     const input = document.getElementById("gene").value;
+    const fuzzyCheckbox = document.getElementById("fuzzySearch");
+    const fuzzyEnabled = fuzzyCheckbox ? fuzzyCheckbox.checked : false;
     const resultsDiv = document.getElementById("results");
     resultsDiv.innerHTML = "";
-    currentMatches = []; // Reset previous matches
+    currentMatches = [];
 
     if (!mappingLoaded) {
         resultsDiv.innerHTML =
@@ -125,13 +156,13 @@ function searchGene() {
     }
 
     // Separate genes using semicolons
-    const genes = [...new Set(
+    const inputGenes = [...new Set(
         input.split(";")
         .map(g => g.trim().toUpperCase())
         .filter(g => g !== "")
     )];
 
-    if (genes.length === 0) {
+    if (inputGenes.length === 0) {
         resultsDiv.innerHTML =
             "<p>Please enter at least one gene.</p>";
         return;
@@ -140,30 +171,73 @@ function searchGene() {
     let html = "";
     let foundCount = 0;
     let missingGenes = [];
+    let targetGenes = [];
+    let fuzzyNotice = "";
 
-    genes.forEach(gene => {
-        if (!mapping[gene]) {
+    const allKeys = Object.keys(mapping);
+
+    // Apply fuzzy matching ONLY when checked and a single gene is entered
+    if (fuzzyEnabled && inputGenes.length === 1) {
+        const query = inputGenes[0];
+
+        targetGenes = allKeys
+            .filter(key => key.trim().toUpperCase().includes(query))
+            .sort((a, b) => {
+                const aUp = a.trim().toUpperCase();
+                const bUp = b.trim().toUpperCase();
+                if (aUp === query) return -1;
+                if (bUp === query) return 1;
+                const aStarts = aUp.startsWith(query);
+                const bStarts = bUp.startsWith(query);
+                if (aStarts && !bStarts) return -1;
+                if (!aStarts && bStarts) return 1;
+                return aUp.localeCompare(bUp);
+            });
+
+        if (targetGenes.length === 0) {
+            missingGenes.push(query);
+        } else {
+            fuzzyNotice = `<br><em>Fuzzy search matched ${targetGenes.length} gene(s) for "${query}"</em>`;
+        }
+    } else {
+        targetGenes = inputGenes;
+        if (fuzzyEnabled && inputGenes.length > 1) {
+            fuzzyNotice = `<br><em>Note: Fuzzy search is disabled when searching multiple genes.</em>`;
+        }
+    }
+
+    targetGenes.forEach(gene => {
+        const normalizedTarget = gene.trim().toUpperCase();
+        const matchedKey = mapping[gene] !== undefined
+            ? gene
+            : allKeys.find(k => k.trim().toUpperCase() === normalizedTarget);
+
+        if (!matchedKey) {
             missingGenes.push(gene);
             return;
         }
 
         foundCount++;
-        html += `<h3>${gene}</h3>`;
+        const displayGene = matchedKey.trim();
+        html += `<h3>${displayGene}</h3>`;
 
-        mapping[gene].forEach(probe => {
-            const pdfURL =
-                "https://ttsttz.github.io/SEGEL-search-site2/PDF/"
-                + encodeURIComponent(probe) + ".pdf";
+        // Handle both single probe strings and arrays of probes
+        const rawProbes = mapping[matchedKey];
+        const probes = Array.isArray(rawProbes) ? rawProbes : [rawProbes];
+
+        probes.forEach(probe => {
+            const cleanProbe = String(probe).trim();
+            const pdfURL = "PDF/" + encodeURIComponent(cleanProbe) + ".pdf";
 
             currentMatches.push({
-                gene: gene,
-                probe: probe,
+                gene: displayGene,
+                probe: cleanProbe,
                 url: pdfURL
             });
 
             html += `
                 <p>
-                    ${probe}
+                    ${cleanProbe}
                     <a href="${pdfURL}" target="_blank">
                         Open PDF
                     </a>
@@ -183,17 +257,19 @@ function searchGene() {
         `;
     }
 
-    // Search summary
+    const searchedCount = (fuzzyEnabled && inputGenes.length === 1)
+        ? targetGenes.length || 1
+        : inputGenes.length;
+
     html = `
         <p>
-            Genes searched: ${genes.length}<br>
+            Genes searched: ${searchedCount}<br>
             Genes found: ${foundCount}<br>
-            Genes not found: ${missingGenes.length}
+            Genes not found: ${missingGenes.length}${fuzzyNotice}
         </p>
         ${downloadButtonHtml}
     ` + html;
 
-    // Report genes not found
     if (missingGenes.length > 0) {
         html += `
             <h3>Genes not found</h3>
@@ -224,7 +300,6 @@ async function downloadAllPDFs() {
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const blob = await response.blob();
 
-            // Place each PDF inside a subfolder named after its gene symbol
             const geneFolder = rootFolder.folder(item.gene);
             geneFolder.file(`${item.probe}.pdf`, blob);
         } catch (err) {
@@ -259,7 +334,6 @@ async function downloadAllPDFs() {
     }
 }
 
-// Trigger search when pressing Enter inside the input box
 document.getElementById("gene").addEventListener("keydown", function(event) {
     if (event.key === "Enter") {
         event.preventDefault();
