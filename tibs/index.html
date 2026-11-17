@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>TIBS</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+
+body {
+    font-family: Arial, sans-serif;
+    max-width: 900px;
+    margin: 40px auto;
+    padding: 20px;
+    line-height: 1.6;
+    color: #333;
+}
+
+.summary {
+    background: #f4f7fa;
+    border-left: 4px solid #3975a8;
+    padding: 15px 20px;
+    margin: 20px 0;
+    border-radius: 5px;
+}
+
+.summary h3 {
+    margin-top: 0;
+    color: #24577a;
+}
+
+.search-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.fuzzy-label {
+    font-size: 14px;
+    color: #444;
+    cursor: pointer;
+    user-select: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.download-btn {
+    background-color: #3975a8;
+    color: white;
+    border: none;
+    padding: 10px 16px;
+    font-size: 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin: 10px 0 20px 0;
+}
+
+.download-btn:hover {
+    background-color: #24577a;
+}
+
+.download-btn:disabled {
+    background-color: #99b8d4;
+    cursor: not-allowed;
+}
+
+</style>
+</head>
+<body>
+
+<h2>Database: Transcriptome of Irritable Bowel Syndrome (TIBS)</h2>
+
+<div class="summary">
+    <h3>About this database</h3>
+    <p>
+    TIBS (Transcriptome of Irritable Bowel Syndrome) is a database of gene expression in irritable bowel syndrome. The database supports genes associated with
+    multiple probe IDs, allowing users to retrieve
+    all available documents for a given gene.
+    </p>
+    <p>
+    <strong>How to use:</strong>
+    </p>
+    <p>
+    Single gene search: DUOX2 (enable <em>Fuzzy search</em> to match partial names like DUOX &rarr; DUOX1, DUOX2)
+    </p>
+    <p>
+    Multiple gene search: DUOX2; PPARG; HSPA6 (exact match only)
+    </p>
+    <p style="margin-bottom: 0;">
+    We are grateful to Mr. Brain Hu from the Essenology Software Corp and Ms. Yan Xu from the Department of Pharmaceutical Science, University of South Florida for their expert advice on database software. This project was supported by the USF Women's Health Seed Grant Awards (No. 0095058) and the USF College of Pharmacy research start-up grant.
+    </p>
+</div>
+
+<!-- Search interface -->
+<h3>Search Gene Symbols</h3>
+
+<div class="search-controls">
+    <input
+        type="text"
+        id="gene"
+        placeholder="Enter genes (e.g. DUOX2; PPARG; HSPA6)"
+        style="width:350px; padding:10px;"
+    >
+
+    <button onclick="searchGene()" style="padding:10px 15px; cursor:pointer;">
+        Search
+    </button>
+
+    <label class="fuzzy-label" title="Matches partial gene names when searching a single gene">
+        <input type="checkbox" id="fuzzySearch">
+        Fuzzy search (single gene only)
+    </label>
+</div>
+
+<!-- Search results -->
+<div id="results"></div>
+
+<p style="margin-top: 30px;">
+All genes included in the TIBS database could be found <a href="Affy_U133_v2_gene_list.html">here</a>.<br>
+If you still cannot find the genes you are interested in, please check their official gene symbols at <a href="http://www.genecards.org" target="_blank" rel="noopener noreferrer">www.genecards.org</a>.
+</p>
+
+<!-- JavaScript -->
+<script>
+let mapping = {};
+let mappingLoaded = false;
+let currentMatches = []; // Stores { gene, probe, url } for Download All
+
+// Load gene database
+fetch("mapping.json")
+.then(response => {
+    if (!response.ok) {
+        throw new Error("mapping.json could not be found");
+    }
+    return response.json();
+})
+.then(data => {
+    mapping = data;
+    mappingLoaded = true;
+    console.log("Gene database loaded successfully. Total genes:", Object.keys(mapping).length);
+})
+.catch(error => {
+    document.getElementById("results").innerHTML =
+        "<p>Error loading database: " + error.message + "</p>";
+});
+
+function searchGene() {
+    const input = document.getElementById("gene").value;
+    const fuzzyCheckbox = document.getElementById("fuzzySearch");
+    const fuzzyEnabled = fuzzyCheckbox ? fuzzyCheckbox.checked : false;
+    const resultsDiv = document.getElementById("results");
+    resultsDiv.innerHTML = "";
+    currentMatches = [];
+
+    if (!mappingLoaded) {
+        resultsDiv.innerHTML =
+            "<p>Database is still loading. Please wait.</p>";
+        return;
+    }
+
+    // Separate genes using semicolons
+    const inputGenes = [...new Set(
+        input.split(";")
+        .map(g => g.trim().toUpperCase())
+        .filter(g => g !== "")
+    )];
+
+    if (inputGenes.length === 0) {
+        resultsDiv.innerHTML =
+            "<p>Please enter at least one gene.</p>";
+        return;
+    }
+
+    let html = "";
+    let foundCount = 0;
+    let missingGenes = [];
+    let targetGenes = [];
+    let fuzzyNotice = "";
+
+    const allKeys = Object.keys(mapping);
+
+    // Apply fuzzy matching ONLY when checked and a single gene is entered
+    if (fuzzyEnabled && inputGenes.length === 1) {
+        const query = inputGenes[0];
+
+        targetGenes = allKeys
+            .filter(key => key.trim().toUpperCase().includes(query))
+            .sort((a, b) => {
+                const aUp = a.trim().toUpperCase();
+                const bUp = b.trim().toUpperCase();
+                if (aUp === query) return -1;
+                if (bUp === query) return 1;
+                const aStarts = aUp.startsWith(query);
+                const bStarts = bUp.startsWith(query);
+                if (aStarts && !bStarts) return -1;
+                if (!aStarts && bStarts) return 1;
+                return aUp.localeCompare(bUp);
+            });
+
+        if (targetGenes.length === 0) {
+            missingGenes.push(query);
+        } else {
+            fuzzyNotice = `<br><em>Fuzzy search matched ${targetGenes.length} gene(s) for "${query}"</em>`;
+        }
+    } else {
+        targetGenes = inputGenes;
+        if (fuzzyEnabled && inputGenes.length > 1) {
+            fuzzyNotice = `<br><em>Note: Fuzzy search is disabled when searching multiple genes.</em>`;
+        }
+    }
+
+    targetGenes.forEach(gene => {
+        const normalizedTarget = gene.trim().toUpperCase();
+        const matchedKey = mapping[gene] !== undefined
+            ? gene
+            : allKeys.find(k => k.trim().toUpperCase() === normalizedTarget);
+
+        if (!matchedKey) {
+            missingGenes.push(gene);
+            return;
+        }
+
+        foundCount++;
+        const displayGene = matchedKey.trim();
+        html += `<h3>${displayGene}</h3>`;
+
+        // Handle both single probe strings and arrays of probes
+        const rawProbes = mapping[matchedKey];
+        const probes = Array.isArray(rawProbes) ? rawProbes : [rawProbes];
+
+        probes.forEach(probe => {
+            const cleanProbe = String(probe).trim();
+            const pdfURL = "https://tibspdf.chengfeng.info/PDF/" + encodeURIComponent(cleanProbe) + ".pdf";
+
+            currentMatches.push({
+                gene: displayGene,
+                probe: cleanProbe,
+                url: pdfURL
+            });
+
+            html += `
+                <p>
+                    ${cleanProbe}
+                    <a href="${pdfURL}" target="_blank">
+                        Open PDF
+                    </a>
+                </p>
+            `;
+        });
+    });
+
+    // Add Download All button if at least one PDF was found
+    let downloadButtonHtml = "";
+    if (currentMatches.length > 0) {
+        downloadButtonHtml = `
+            <button id="downloadAllBtn" class="download-btn" onclick="downloadAllPDFs()">
+                Download All PDFs (${currentMatches.length} files as ZIP)
+            </button>
+            <span id="downloadStatus" style="margin-left: 10px; font-size: 14px; color: #555;"></span>
+        `;
+    }
+
+    const searchedCount = (fuzzyEnabled && inputGenes.length === 1)
+        ? targetGenes.length || 1
+        : inputGenes.length;
+
+    html = `
+        <p>
+            Genes searched: ${searchedCount}<br>
+            Genes found: ${foundCount}<br>
+            Genes not found: ${missingGenes.length}${fuzzyNotice}
+        </p>
+        ${downloadButtonHtml}
+    ` + html;
+
+    if (missingGenes.length > 0) {
+        html += `
+            <h3>Genes not found</h3>
+            <p>${missingGenes.join(", ")}</p>
+        `;
+    }
+
+    resultsDiv.innerHTML = html;
+}
+
+async function downloadAllPDFs() {
+    if (currentMatches.length === 0) return;
+
+    const btn = document.getElementById("downloadAllBtn");
+    const status = document.getElementById("downloadStatus");
+    btn.disabled = true;
+
+    const zip = new JSZip();
+    const rootFolder = zip.folder("TIBS_PDFs");
+    let completed = 0;
+    let failed = 0;
+
+    status.textContent = `Fetching 0 of ${currentMatches.length} PDFs...`;
+
+    for (const item of currentMatches) {
+        try {
+            const response = await fetch(item.url);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const blob = await response.blob();
+
+            const geneFolder = rootFolder.folder(item.gene);
+            geneFolder.file(`${item.probe}.pdf`, blob);
+        } catch (err) {
+            console.error(`Failed to fetch ${item.probe}.pdf:`, err);
+            failed++;
+        }
+
+        completed++;
+        status.textContent = `Fetching ${completed} of ${currentMatches.length} PDFs...`;
+    }
+
+    status.textContent = "Creating ZIP folder...";
+
+    try {
+        const zipBlob = await zip.generateAsync({ type: "blob" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(zipBlob);
+        link.download = "TIBS_PDFs.zip";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(link.href);
+
+        status.textContent = failed > 0
+            ? `Done! (${failed} file(s) could not be retrieved)`
+            : "Download complete!";
+    } catch (err) {
+        status.textContent = "Error creating ZIP file.";
+        console.error(err);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+document.getElementById("gene").addEventListener("keydown", function(event) {
+    if (event.key === "Enter") {
+        event.preventDefault();
+        searchGene();
+    }
+});
+</script>
+
+</body>
+</html>
